@@ -329,6 +329,35 @@ import { Thread, Message, User } from '../models/index.js';
 
 const router = express.Router();
 
+const hydrateThread = async (thread) => {
+  if (!thread) return null;
+
+  const messages = await Message.find({ threadId: thread._id })
+    .sort({ timestamp: 1 })
+    .lean();
+
+  return {
+    id: thread._id.toString(),
+    title: thread.title,
+    description: thread.description,
+    creator: thread.creatorUsername,
+    creatorId: thread.creator.toString(),
+    location: thread.location,
+    tags: thread.tags,
+    expiresAt: thread.expiresAt.toISOString(),
+    members: (thread.members || []).map((member) => member.toString()),
+    pendingRequests: (thread.pendingRequests || []).map((request) => request.toString()),
+    chat: messages.map((msg) => ({
+      id: msg._id.toString(),
+      user: msg.username,
+      userId: msg.userId.toString(),
+      message: msg.message,
+      timestamp: msg.timestamp.toISOString()
+    })),
+    createdAt: thread.createdAt.toISOString()
+  };
+};
+
 // GET /api/threads - Get all active threads
 router.get('/', async (req, res) => {
   try {
@@ -342,39 +371,83 @@ router.get('/', async (req, res) => {
 
     console.log(`📊 FOUND ${threads.length} ACTIVE THREADS`);
 
-    const threadsWithMessages = await Promise.all(
-      threads.map(async (thread) => {
-        const messages = await Message.find({ threadId: thread._id })
-          .sort({ timestamp: 1 })
-          .lean();
-
-        return {
-          id: thread._id.toString(),
-          title: thread.title,
-          description: thread.description,
-          creator: thread.creatorUsername,
-          creatorId: thread.creator.toString(),
-          location: thread.location,
-          tags: thread.tags,
-          expiresAt: thread.expiresAt.toISOString(),
-          members: thread.members.map(m => m.toString()),
-          pendingRequests: thread.pendingRequests.map(p => p.toString()),
-          chat: messages.map(msg => ({
-            id: msg._id.toString(),
-            user: msg.username,
-            userId: msg.userId.toString(),
-            message: msg.message,
-            timestamp: msg.timestamp.toISOString()
-          })),
-          createdAt: thread.createdAt.toISOString()
-        };
-      })
-    );
+    const threadsWithMessages = await Promise.all(threads.map(hydrateThread));
 
     res.json({ success: true, threads: threadsWithMessages });
   } catch (error) {
     console.error('❌ GET THREADS ERROR:', error);
     res.status(500).json({ success: false, message: 'Error fetching threads' });
+  }
+});
+
+// GET /api/threads/user/:userId - Summary + lists for profile views
+router.get('/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const userThreads = await Thread.find({
+      $or: [{ creator: userId }, { members: userId }]
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const hydratedThreads = (await Promise.all(userThreads.map(hydrateThread))).filter(Boolean);
+
+    const createdThreads = hydratedThreads.filter((thread) => thread.creatorId === userId);
+    const joinedThreads = hydratedThreads.filter(
+      (thread) => thread.creatorId !== userId && thread.members.includes(userId)
+    );
+
+    const stats = {
+      created: createdThreads.length,
+      joined: joinedThreads.length,
+      impact: createdThreads.reduce((total, thread) => total + (thread.members?.length ?? 0), 0)
+    };
+
+    res.json({
+      success: true,
+      stats,
+      createdThreads,
+      joinedThreads
+    });
+  } catch (error) {
+    console.error('❌ USER THREADS ERROR:', error);
+    res.status(500).json({ success: false, message: 'Error fetching user threads' });
+  }
+});
+
+// GET /api/threads/alerts/:userId - Alert feed for a user
+router.get('/alerts/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const joinedThreads = await Thread.find({ members: userId })
+      .sort({ expiresAt: 1 })
+      .lean();
+
+    const hydratedThreads = (await Promise.all(joinedThreads.map(hydrateThread))).filter(Boolean);
+    const now = Date.now();
+
+    const alerts = hydratedThreads.map((thread) => {
+      const expiresAt = new Date(thread.expiresAt).getTime();
+      const hoursUntilExpiry = (expiresAt - now) / (1000 * 60 * 60);
+      const type = hoursUntilExpiry <= 1 ? 'urgent' : hoursUntilExpiry <= 4 ? 'soon' : 'scheduled';
+
+      return {
+        id: thread.id,
+        title: thread.title,
+        message: `Heads up! ${thread.title} kicks off soon at ${thread.location}.`,
+        time: thread.expiresAt,
+        type,
+        location: thread.location,
+        thread
+      };
+    });
+
+    res.json({ success: true, alerts });
+  } catch (error) {
+    console.error('❌ THREAD ALERTS ERROR:', error);
+    res.status(500).json({ success: false, message: 'Error fetching alerts' });
   }
 });
 
@@ -480,16 +553,43 @@ router.put('/:id', async (req, res) => {
   }
 });
 
-// DELETE /api/threads/:id - Delete thread
+// DELETE /api/threads/:id - Delete thread (creator or admin only)
 router.delete('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { userId } = req.body;
 
-    if (userId !== 'admin_001') {
+    console.log(`\n🗑️ DELETE REQUEST | Thread: ${id} | User: ${userId}`);
+
+    // Find the thread first to check ownership
+    const thread = await Thread.findById(id);
+    if (!thread) {
+      console.log('❌ Thread not found');
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Thread not found' 
+      });
+    }
+
+    // Check if user is the creator
+    const isCreator = thread.creator.toString() === userId;
+    console.log(`  Creator check: thread.creator=${thread.creator} vs userId=${userId} => ${isCreator}`);
+
+    // Check if user is admin from the database
+    let isAdmin = false;
+    try {
+      const user = await User.findById(userId);
+      isAdmin = user?.isAdmin === true;
+      console.log(`  Admin check: user.isAdmin=${user?.isAdmin} => ${isAdmin}`);
+    } catch (e) {
+      console.log('  Could not check admin status');
+    }
+    
+    if (!isCreator && !isAdmin) {
+      console.log('❌ Permission denied - not creator or admin');
       return res.status(403).json({ 
         success: false, 
-        message: 'Admin access required' 
+        message: 'Only the thread creator or an admin can delete this thread' 
       });
     }
 
@@ -497,6 +597,8 @@ router.delete('/:id', async (req, res) => {
       Thread.findByIdAndDelete(id),
       Message.deleteMany({ threadId: id })
     ]);
+
+    console.log(`✅ THREAD DELETED | ID: ${id} | By: ${userId} (${isCreator ? 'creator' : 'admin'})`);
 
     // Emit socket event
     const io = req.app.get('io');

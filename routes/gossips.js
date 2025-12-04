@@ -251,9 +251,23 @@
 // export default router;
 
 import express from 'express';
-import { Gossip, GossipComment, CommentReport } from '../models/index.js';
+import { Gossip, GossipComment, CommentReport, User } from '../models/index.js';
 
 const router = express.Router();
+
+const ADMIN_PLACEHOLDER_ID = 'admin_001';
+
+async function isAdminUser(userId) {
+  if (!userId) return false;
+  if (userId === ADMIN_PLACEHOLDER_ID) return true;
+  try {
+    const user = await User.findById(userId).lean();
+    return Boolean(user?.isAdmin);
+  } catch (error) {
+    console.error('⚠️  ADMIN CHECK ERROR:', error.message);
+    return false;
+  }
+}
 
 // GET /api/gossips
 router.get('/', async (req, res) => {
@@ -530,7 +544,7 @@ router.get('/reports/all', async (req, res) => {
   try {
     const { userId } = req.query;
 
-    if (userId !== 'admin_001') {
+    if (!(await isAdminUser(userId))) {
       return res.status(403).json({ 
         success: false, 
         message: 'Admin access required' 
@@ -586,7 +600,7 @@ router.put('/reports/:reportId', async (req, res) => {
     const { reportId } = req.params;
     const { userId, status, adminNotes, adminUsername } = req.body;
 
-    if (userId !== 'admin_001') {
+    if (!(await isAdminUser(userId))) {
       return res.status(403).json({ 
         success: false, 
         message: 'Admin access required' 
@@ -640,7 +654,9 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ success: false, message: 'Gossip not found' });
     }
 
-    if (userId !== 'admin_001' && gossip.author.toString() !== userId) {
+    const isAdmin = await isAdminUser(userId);
+
+    if (!isAdmin && gossip.author.toString() !== userId) {
       return res.status(403).json({ 
         success: false, 
         message: 'Not authorized to delete this gossip' 
@@ -677,7 +693,9 @@ router.delete('/:gossipId/comments/:commentId', async (req, res) => {
       });
     }
 
-    if (userId !== 'admin_001' && comment.author.toString() !== userId) {
+    const isAdmin = await isAdminUser(userId);
+
+    if (!isAdmin && comment.author.toString() !== userId) {
       return res.status(403).json({ 
         success: false, 
         message: 'Not authorized to delete this comment' 
