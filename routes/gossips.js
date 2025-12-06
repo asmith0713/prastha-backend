@@ -312,6 +312,10 @@ router.get('/', async (req, res) => {
             isAnonymous: false,
             parentCommentId: comment.parentCommentId?.toString() || null,
             replyTo: comment.replyTo || null,
+            upvotes: comment.upvotedBy?.length || 0,
+            downvotes: comment.downvotedBy?.length || 0,
+            upvotedBy: comment.upvotedBy?.map(id => id.toString()) || [],
+            downvotedBy: comment.downvotedBy?.map(id => id.toString()) || [],
             createdAt: comment.createdAt.toISOString()
           })),
           createdAt: gossip.createdAt.toISOString()
@@ -459,12 +463,65 @@ router.post('/:id/comments', async (req, res) => {
         isAnonymous: false,
         parentCommentId: comment.parentCommentId?.toString() || null,
         replyTo: comment.replyTo || null,
+        upvotes: comment.upvotedBy?.length || 0,
+        downvotes: comment.downvotedBy?.length || 0,
+        upvotedBy: comment.upvotedBy?.map((entry) => entry.toString()) || [],
+        downvotedBy: comment.downvotedBy?.map((entry) => entry.toString()) || [],
         createdAt: comment.createdAt.toISOString()
       }
     });
   } catch (error) {
     console.error('❌ ADD COMMENT ERROR:', error);
     res.status(500).json({ success: false, message: 'Error adding comment' });
+  }
+});
+
+// POST /api/gossips/:gossipId/comments/:commentId/vote
+router.post('/:gossipId/comments/:commentId/vote', async (req, res) => {
+  try {
+    const { gossipId, commentId } = req.params;
+    const { userId, voteType } = req.body;
+
+    if (!userId || !voteType) {
+      return res.status(400).json({
+        success: false,
+        message: 'User and voteType are required'
+      });
+    }
+
+    if (!['up', 'down', 'none'].includes(voteType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid vote type'
+      });
+    }
+
+    const comment = await GossipComment.findOne({ _id: commentId, gossipId });
+    if (!comment) {
+      return res.status(404).json({ success: false, message: 'Comment not found' });
+    }
+
+    comment.upvotedBy = comment.upvotedBy.filter((uid) => uid.toString() !== userId);
+    comment.downvotedBy = comment.downvotedBy.filter((uid) => uid.toString() !== userId);
+
+    if (voteType === 'up') {
+      comment.upvotedBy.push(userId);
+    } else if (voteType === 'down') {
+      comment.downvotedBy.push(userId);
+    }
+
+    await comment.save();
+
+    res.json({
+      success: true,
+      upvotes: comment.upvotedBy.length,
+      downvotes: comment.downvotedBy.length,
+      upvotedBy: comment.upvotedBy.map((uid) => uid.toString()),
+      downvotedBy: comment.downvotedBy.map((uid) => uid.toString())
+    });
+  } catch (error) {
+    console.error('❌ COMMENT VOTE ERROR:', error);
+    res.status(500).json({ success: false, message: 'Error voting on comment' });
   }
 });
 

@@ -289,8 +289,9 @@ const threadSchema = new mongoose.Schema({
   },
   description: {
     type: String,
-    required: true,
-    trim: true
+    required: false,
+    trim: true,
+    default: ''
   },
   creator: {
     type: mongoose.Schema.Types.ObjectId,
@@ -347,6 +348,20 @@ const messageSchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
+  },
+  replyToMessageId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message',
+    default: null
+  },
+  replyToUser: {
+    type: String,
+    default: null
+  },
+  replyPreview: {
+    type: String,
+    default: null,
+    maxlength: 300
   },
   timestamp: {
     type: Date,
@@ -434,6 +449,20 @@ const gossipCommentSchema = new mongoose.Schema({
   replyTo: {
     type: String,
     default: null
+  },
+  upvotedBy: {
+    type: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    default: []
+  },
+  downvotedBy: {
+    type: [{
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }],
+    default: []
   }
 }, {
   timestamps: true
