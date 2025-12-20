@@ -4,7 +4,7 @@ Express + MongoDB API powering Prastha’s small thread hub. It exposes only the
 
 This service is co-maintained by **asmith0713** and **Niteesh206** and is based on [Niteesh206/event-thread-backend](https://github.com/Niteesh206/event-thread-backend).
 
-> Frontend pairing: [`client/event-thread-next`](../../client/event-thread-next/README.md)
+> Frontend pairing: [asmith0713/prastha-frontend](https://github.com/asmith0713/prastha-frontend.git)
 
 ## Features
 
